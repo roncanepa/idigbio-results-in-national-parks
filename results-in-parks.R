@@ -4,20 +4,13 @@ library(tidyverse)
 require(sp)
 library(rgdal)
 library(ridigbio)
-#library(leaflet)
-#library(viridis)
-
-# TODO: figure out proper labels on graph
-# TODO: not all parks draw a polygon. Problem with implementation or with their data?
-# TODO: is there an api field / method for "has geopoint"?
 
 IDIGBIO_API_RESULTS_FILE = "./data/idigbio_api_results.json"
-RECORDS_WITHIN_BOUNDS_OUTPUT = "./output/records_within_bounds.csv"
-RESTRICT_TO_SPECIFIC_PARK_CODES = FALSE
-
+RECORDS_WITHIN_BOUNDS_OUTPUT = "./output/records_within_bounds.tsv"
 
 ####################
 # Step: get data from iDigBio
+# a tibble is essential a data frame, slightly modernized by the tidyverse
 idigbio_api_results = tibble()
 
 if (!file.exists(IDIGBIO_API_RESULTS_FILE)) {
@@ -37,7 +30,6 @@ if (!file.exists(IDIGBIO_API_RESULTS_FILE)) {
   idigbio_api_results = as_tibble(read_json(IDIGBIO_API_RESULTS_FILE, simplifyVector = TRUE))
 }
 
-
 # clean our data. Note that backticks are important for picking up proper column
 api_results_clean = idigbio_api_results %>% 
   filter(!is.na(`geopoint.lon`)) %>% 
@@ -51,14 +43,14 @@ api_results_clean = idigbio_api_results %>%
 # Step: Read in the shape data
 # 
 #  rgdal requires gdal, which might lead to frustrations getting it installed/compiled
+# note the lack of file extension on "nps_boundary" in layer
 nps_shapes = readOGR(dsn="nps_boundary/Current_Shapes/Data_Store/06-06-12_Posting", layer="nps_boundary")
 
-# nearly half of the entire national list doesn't have a state value
-# and we have no other way to restrict them
-# we'll shortcut this for now with finding the codes manually
-# Other options include perhaps the NPS API
+# roughly half of the entire national list doesn't have a state value specified, which makes it
+# difficult to restrict based on that field.
+# We'll shortcut this for now with finding the codes manually.
+# Other options include perhaps seeing if the NPS API (free bu requires signup) allows us to do so
 # 
-# if we don't restrict somehow, the map will draw ALL the parks, even without matching records
 # Another option would be to do the opposite lookup and restrict the parks to only parks that have 
 # point matches inside of them.
 park_codes_of_interest = c("BICY", "BISC", "CANA", "CASA", "DESO", "DRTO", "EVER", "FOCA", "FOMA", "GUIS", "GUGE", "TIMU")
@@ -76,7 +68,7 @@ api_results_spdf = data.frame(api_results_clean)
 # coordinates() takes a dataframe and creates a SpatialPointsDataFrame
 coordinates(api_results_spdf) = c("lon", "lat")
 
-# In order to be mapped together, points and shapes need to be using the same project system.
+# In order to be mapped together, points and shapes need use the same projection system.
 # we've checked that they're the same projection system by viewing:
 # nps_shapes@proj4string
 # which shows:
@@ -106,20 +98,16 @@ points_that_overlap = api_results_clean %>%
 # ggmap needs a data frame, so we're now going to change it back.
 nps_shapes_that_intersect_df = fortify(nps_shapes_in_fl)
 
+# due to some quirkiness with handling automatically generated IDs in R and the NPS shape data,
+# we'll build this to allow us to map an ID to a park code (UNIT_CODE)
 park_id_lookup = nps_shapes_in_fl@data %>% 
   rownames_to_column(var = "park_id") %>% 
-  select(park_id, UNIT_CODE) %>% 
+  select(park_id, UNIT_CODE) 
 
-
-
-# "Error in fix.by(by.x, x) : 'by' must specify a uniquely valid column"
+# add our park UNIT_CODE into our dataframe via a "join"-type behavior  
 nps_shapes_that_intersect_df <- merge(nps_shapes_that_intersect_df, park_id_lookup, by.x = "id", by.y = "park_id", all.x = TRUE)
 
-# now lets squish the park code ("UNIT_CODE") in so we have a friendly label
-#nps_shapes_that_intersect %>% 
-# mutate(park_code = as.numeric (`geopoint.lon`))
 
-write_tsv(points_that_overlap, RECORDS_WITHIN_BOUNDS_OUTPUT)
 
 ########################################
 # Step: set up mapping
@@ -133,8 +121,6 @@ bounding_box = c("left" = min(points_that_overlap$lon) + netagive_margin,
                  "right"=max(points_that_overlap$lon) + positive_margin, 
                  "top" = max(points_that_overlap$lat) + positive_margin
   )
-
-
 # if you try using get_map(),  you might see this: 
 # "Error: Google now requires an API key. See ?register_google for details."
 # 
@@ -142,8 +128,17 @@ bounding_box = c("left" = min(points_that_overlap$lon) + netagive_margin,
 m = get_stamenmap(bbox = bounding_box, zoom = 7, maptype = "toner-lite", source = "stamen" )
 
 ########################################
+# OUTPUTS
+
+write_tsv(points_that_overlap, RECORDS_WITHIN_BOUNDS_OUTPUT)
+
+########################################
 # map 1
 # a plot of all search result records with geopoints before doing the intersection search
+
+# note that with both maps, we're using the kingdom API field for plotting points, and so any points
+# that have an NA for that field will not appear on the map (but will be present in the output data)
+
 map_1_subtitle = paste("Total records with geopoints:", api_results_clean %>% summarise(n = n()))
 
 ggmap(m,
@@ -168,6 +163,16 @@ ggmap(m,
       base_layer = ggplot(points_that_overlap, aes(x = lon, y = lat, alpha = 0.7))+ 
         ggtitle("Search results within park bounds", subtitle = map_2_subtitle)
 ) + 
-  geom_polygon(aes(x = long, y = lat, group = group, fill = id), 
-               data = nps_shapes_that_intersect_df, alpha = 0.7) + 
-  geom_point(data = points_that_overlap, aes(shape = kingdom, color= substr(institutioncode, 1, 6)))
+  geom_polygon(aes(x = long, y = lat, group = group, fill = UNIT_CODE), 
+               data = nps_shapes_that_intersect_df, alpha = 0.5) + 
+  geom_point(data = points_that_overlap, aes(shape = kingdom, color = kingdom), alpha = 0.7)
+
+########################################
+# plot 1: counts by park
+
+ggplot(points_that_overlap, aes(overlap_code)) +
+  geom_bar(aes(fill = kingdom))
+
+# plot 2: counts by institutioncode
+ggplot(points_that_overlap, aes(institutioncode)) +
+  geom_bar(aes(fill = kingdom))
