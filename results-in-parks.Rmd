@@ -1,13 +1,24 @@
+```{r, load_packages, message=FALSE, echo=FALSE, warning=FALSE}
 library(ggmap)
 library(jsonlite)
 library(tidyverse)
 require(sp)
 library(rgdal)
 library(ridigbio)
+library(knitr)
 
 IDIGBIO_API_RESULTS_FILE = "./data/idigbio_api_results.json"
 RECORDS_WITHIN_BOUNDS_OUTPUT = "./output/records_within_bounds.tsv"
+```
 
+The general steps we want to take:
+
+1. Get data from the iDigBio API
+1. Get shape data for parks from the National Park Service (NPS)
+1. Search for records from the API inside of those parks
+
+Lets get data from the API.  Here, I'll search for stateprovince = "Florida"
+```{r,get_idigbio_data,  cache=TRUE, message=FALSE, echo=FALSE, warning=FALSE}
 ####################
 # Step: get data from iDigBio
 # a tibble is essential a data frame, slightly modernized by the tidyverse
@@ -29,7 +40,16 @@ if (!file.exists(IDIGBIO_API_RESULTS_FILE)) {
   # It is critical to include simplifyVector = TRUE or else it reads back as a list.
   idigbio_api_results = as_tibble(read_json(IDIGBIO_API_RESULTS_FILE, simplifyVector = TRUE))
 }
+```
 
+Here's a small look at the data we get back:
+```{r, show_initial_results, message=FALSE, echo=FALSE, warning=FALSE}
+
+head(idigbio_api_results)
+
+```
+
+```{r, clean_data, message=FALSE, echo=FALSE, warning=FALSE}
 # clean our data. Note that backticks are important for picking up proper column
 api_results_clean = idigbio_api_results %>% 
   filter(!is.na(`geopoint.lon`)) %>% 
@@ -37,8 +57,9 @@ api_results_clean = idigbio_api_results %>%
   mutate(lon = as.numeric (`geopoint.lon`)) %>% 
   mutate(lat = as.numeric (`geopoint.lat`)) %>% 
   rownames_to_column(var = "id")
-  
+```  
 
+```{r, get_shape_data, include=FALSE, message=FALSE, echo=FALSE, warning=FALSE}
 ########################################
 # Step: Read in the shape data
 # 
@@ -78,8 +99,9 @@ coordinates(api_results_spdf) = c("lon", "lat")
 # and so we know it's "safe" to assign it
 #
 proj4string(api_results_spdf) <- proj4string(nps_shapes)
+```
 
-
+```{r, perform_intersection, message=FALSE, echo=FALSE, warning=FALSE}
 ########################################
 # Step: perform intersection search
 
@@ -106,9 +128,9 @@ park_id_lookup = nps_shapes_in_fl@data %>%
 
 # add our park UNIT_CODE into our dataframe via a "join"-type behavior  
 nps_shapes_that_intersect_df <- merge(nps_shapes_that_intersect_df, park_id_lookup, by.x = "id", by.y = "park_id", all.x = TRUE)
+```
 
-
-
+```{r, mapping_and_outputs, message=FALSE, echo=FALSE, warning=FALSE}
 ########################################
 # Step: set up mapping
 
@@ -131,7 +153,9 @@ m = get_stamenmap(bbox = bounding_box, zoom = 7, maptype = "toner-lite", source 
 # OUTPUTS
 
 write_tsv(points_that_overlap, RECORDS_WITHIN_BOUNDS_OUTPUT)
+```
 
+```{r, draw_plots, message=FALSE, echo=FALSE, warning=FALSE}
 ########################################
 # map 1
 # a plot of all search result records with geopoints before doing the intersection search
@@ -171,8 +195,11 @@ ggmap(m,
 # plot 1: counts by park
 
 ggplot(points_that_overlap, aes(overlap_code)) +
+  ggtitle("counts by park") + 
   geom_bar(aes(fill = kingdom))
 
 # plot 2: counts by institutioncode
 ggplot(points_that_overlap, aes(institutioncode)) +
+  ggtitle("counts by institutioncode") +
   geom_bar(aes(fill = kingdom))
+```
