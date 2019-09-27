@@ -4,6 +4,8 @@ library(tidyverse)
 require(sp)
 library(rgdal)
 library(ridigbio)
+#library(leaflet)
+#library(viridis)
 
 # TODO: figure out proper labels on graph
 # TODO: not all parks draw a polygon. Problem with implementation or with their data?
@@ -16,10 +18,10 @@ RESTRICT_TO_SPECIFIC_PARK_CODES = FALSE
 
 ####################
 # Step: get data from iDigBio
-idigbio_api_results = data.frame()
+idigbio_api_results = tibble()
 
 if (!file.exists(IDIGBIO_API_RESULTS_FILE)) {
-  idigbio_api_results = idig_search_records(rq = list(
+  idigbio_api_results = as_tibble(idig_search_records(rq = list(
       stateprovince = "Florida"
     ),
     fields = c("uuid", "etag", "geopoint", "recordset", "stateprovince", 
@@ -27,11 +29,12 @@ if (!file.exists(IDIGBIO_API_RESULTS_FILE)) {
                "data.dwc:coordinateUncertaintyInMeters", "institutionid", 
                "collectioncode", "country", "county", "catalognumber"),
     limit = 1000)
+  )
   write_json(idigbio_api_results, IDIGBIO_API_RESULTS_FILE)
   
 } else {
   # It is critical to include simplifyVector = TRUE or else it reads back as a list.
-  idigbio_api_results = read_json(IDIGBIO_API_RESULTS_FILE, simplifyVector = TRUE)
+  idigbio_api_results = as_tibble(read_json(IDIGBIO_API_RESULTS_FILE, simplifyVector = TRUE))
 }
 
 
@@ -40,7 +43,8 @@ api_results_clean = idigbio_api_results %>%
   filter(!is.na(`geopoint.lon`)) %>% 
   filter(!is.na(`geopoint.lat`)) %>% 
   mutate(lon = as.numeric (`geopoint.lon`)) %>% 
-  mutate(lat = as.numeric (`geopoint.lat`)) 
+  mutate(lat = as.numeric (`geopoint.lat`)) %>% 
+  rownames_to_column(var = "id")
   
 
 ########################################
@@ -63,7 +67,6 @@ park_codes_of_interest = c("BICY", "BISC", "CANA", "CASA", "DESO", "DRTO", "EVER
 matches_vector = nps_shapes@data$UNIT_CODE %in% park_codes_of_interest
 nps_shapes_in_fl = nps_shapes[matches_vector,]
 
-
 ########################################
 # Step: create a SpatialPointsDataFrame that we can use to search
 # 
@@ -73,6 +76,7 @@ api_results_spdf = data.frame(api_results_clean)
 # coordinates() takes a dataframe and creates a SpatialPointsDataFrame
 coordinates(api_results_spdf) = c("lon", "lat")
 
+# In order to be mapped together, points and shapes need to be using the same project system.
 # we've checked that they're the same projection system by viewing:
 # nps_shapes@proj4string
 # which shows:
@@ -83,11 +87,6 @@ coordinates(api_results_spdf) = c("lon", "lat")
 #
 proj4string(api_results_spdf) <- proj4string(nps_shapes)
 
-
-if (RESTRICT_TO_SPECIFIC_PARK_CODES){
-  #todo?
-  #nps_shapes = nps_shapes@data$UNIT_CODE %in% florida_park_codes
-}
 
 ########################################
 # Step: perform intersection search
@@ -106,6 +105,15 @@ points_that_overlap = api_results_clean %>%
 
 # ggmap needs a data frame, so we're now going to change it back.
 nps_shapes_that_intersect_df = fortify(nps_shapes_in_fl)
+
+park_id_lookup = nps_shapes_in_fl@data %>% 
+  rownames_to_column(var = "park_id") %>% 
+  select(park_id, UNIT_CODE) %>% 
+
+
+
+# "Error in fix.by(by.x, x) : 'by' must specify a uniquely valid column"
+nps_shapes_that_intersect_df <- merge(nps_shapes_that_intersect_df, park_id_lookup, by.x = "id", by.y = "park_id", all.x = TRUE)
 
 # now lets squish the park code ("UNIT_CODE") in so we have a friendly label
 #nps_shapes_that_intersect %>% 
@@ -126,6 +134,7 @@ bounding_box = c("left" = min(points_that_overlap$lon) + netagive_margin,
                  "top" = max(points_that_overlap$lat) + positive_margin
   )
 
+
 # if you try using get_map(),  you might see this: 
 # "Error: Google now requires an API key. See ?register_google for details."
 # 
@@ -138,12 +147,12 @@ m = get_stamenmap(bbox = bounding_box, zoom = 7, maptype = "toner-lite", source 
 map_1_subtitle = paste("Total records with geopoints:", api_results_clean %>% summarise(n = n()))
 
 ggmap(m,
-      base_layer = ggplot(api_results_clean, aes(x = lon, y = lat, alpha = 0.7)) + 
+      base_layer = ggplot(api_results_clean, aes(x = lon, y = lat)) + 
       ggtitle("All points from search results", subtitle = map_1_subtitle) 
       ) + 
-  geom_polygon(aes(x = long, y = lat, group = group, color = id, fill = id), 
+  geom_polygon(aes(x = long, y = lat, group = group, fill = UNIT_CODE), 
                data = nps_shapes_that_intersect_df, alpha = 0.5) + 
-  geom_point(data = api_results_clean, aes(color = kingdom))
+  geom_point(data = api_results_clean, aes(shape = kingdom, color = kingdom), alpha = 0.7)
 
 
 
@@ -159,6 +168,6 @@ ggmap(m,
       base_layer = ggplot(points_that_overlap, aes(x = lon, y = lat, alpha = 0.7))+ 
         ggtitle("Search results within park bounds", subtitle = map_2_subtitle)
 ) + 
-  geom_polygon(aes(x = long, y = lat, group = group, color = id, fill = id), 
+  geom_polygon(aes(x = long, y = lat, group = group, fill = id), 
                data = nps_shapes_that_intersect_df, alpha = 0.7) + 
-  geom_point(data = points_that_overlap, aes(color = kingdom))
+  geom_point(data = points_that_overlap, aes(shape = kingdom, color= substr(institutioncode, 1, 6)))
