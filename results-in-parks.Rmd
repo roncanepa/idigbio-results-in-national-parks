@@ -1,3 +1,14 @@
+--- 
+title: "My Document"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+  pdf_document:
+    fig_width: 8
+    fig_height: 6
+--- 
+
 ```{r, load_packages, message=FALSE, echo=FALSE, warning=FALSE}
 library(ggmap)
 library(jsonlite)
@@ -9,6 +20,8 @@ library(knitr)
 
 IDIGBIO_API_RESULTS_FILE = "./data/idigbio_api_results.json"
 RECORDS_WITHIN_BOUNDS_OUTPUT = "./output/records_within_bounds.tsv"
+USE_RANDOM_SUBSET = TRUE
+RANDOM_SUBSET_AMOUNT = 10000
 ```
 
 The general steps we want to take:
@@ -32,13 +45,18 @@ if (!file.exists(IDIGBIO_API_RESULTS_FILE)) {
                "institutioncode", "phylum", "basisofrecord", "kingdom", 
                "data.dwc:coordinateUncertaintyInMeters", "institutionid", 
                "collectioncode", "country", "county", "catalognumber"),
-    limit = 1000)
+    limit = 100000)
   )
   write_json(idigbio_api_results, IDIGBIO_API_RESULTS_FILE)
   
 } else {
   # It is critical to include simplifyVector = TRUE or else it reads back as a list.
   idigbio_api_results = as_tibble(read_json(IDIGBIO_API_RESULTS_FILE, simplifyVector = TRUE))
+}
+
+if(USE_RANDOM_SUBSET){
+  set.seed(123456789)
+  idigbio_api_results = sample_n(idigbio_api_results, RANDOM_SUBSET_AMOUNT)
 }
 ```
 
@@ -201,5 +219,6 @@ ggplot(points_that_overlap, aes(overlap_code)) +
 # plot 2: counts by institutioncode
 ggplot(points_that_overlap, aes(institutioncode)) +
   ggtitle("counts by institutioncode") +
-  geom_bar(aes(fill = kingdom))
+  geom_bar(aes(fill = kingdom)) +
+  coord_flip()
 ```
