@@ -1,5 +1,5 @@
 --- 
-title: "My Document"
+title: "iDigBio Results in National Parks"
 output:
   html_document:
     fig_width: 8
@@ -28,7 +28,7 @@ The general steps we want to take:
 
 1. Get data from the iDigBio API
 1. Get shape data for parks from the National Park Service (NPS)
-1. Search for records from the API inside of those parks
+1. From the API results, find the records that are inside of parks
 
 Lets get data from the API.  Here, I'll search for stateprovince = "Florida"
 ```{r,get_idigbio_data,  cache=TRUE, message=FALSE, echo=FALSE, warning=FALSE}
@@ -69,6 +69,7 @@ head(idigbio_api_results)
 
 ```{r, clean_data, message=FALSE, echo=FALSE, warning=FALSE}
 # clean our data. Note that backticks are important for picking up proper column
+# we also could have used API fields to insist on records that have geopoints
 api_results_clean = idigbio_api_results %>% 
   filter(!is.na(`geopoint.lon`)) %>% 
   filter(!is.na(`geopoint.lat`)) %>% 
@@ -119,6 +120,16 @@ coordinates(api_results_spdf) = c("lon", "lat")
 proj4string(api_results_spdf) <- proj4string(nps_shapes)
 ```
 
+Here are the names and "codes" of the parks in Florida:
+* https://www.nps.gov/state/fl/index.htm
+```{r, show_park_names, echo=FALSE}
+
+nps_shapes_in_fl@data %>% 
+  arrange(UNIT_CODE) %>% 
+  select(UNIT_CODE, UNIT_NAME)
+
+```
+
 ```{r, perform_intersection, message=FALSE, echo=FALSE, warning=FALSE}
 ########################################
 # Step: perform intersection search
@@ -126,14 +137,15 @@ proj4string(api_results_spdf) <- proj4string(nps_shapes)
 # compute a df full of true/false for whether it intersects with our areas of interest
 intersections <- over(api_results_spdf, nps_shapes_in_fl[,"UNIT_CODE"]) 
 
-# assign those true/false values back into our data
-# any result with a unit code set will be an overlap
-# any result without a unit code in overlap_code is not within the bounds
-api_results_clean$overlap_code = intersections$UNIT_CODE
+# assign those true/false values back into our data.
+# "UNIT_CODE" is from the NPS data and represents the park abbreviation
+# any result with a park code set will be an overlap
+# any result without a park code in park_code is not within the bounds
+api_results_clean$park_code = intersections$UNIT_CODE
 
 # now filter out points that don't fall within the boundaries
 points_that_overlap = api_results_clean %>% 
-  filter(! is.na(overlap_code))
+  filter(! is.na(park_code))
 
 # ggmap needs a data frame, so we're now going to change it back.
 nps_shapes_that_intersect_df = fortify(nps_shapes_in_fl)
@@ -153,11 +165,11 @@ nps_shapes_that_intersect_df <- merge(nps_shapes_that_intersect_df, park_id_look
 # Step: set up mapping
 
 # these will add some extra room along the edges of our map
-netagive_margin = -1
+negative_margin = -1
 positive_margin = 1
 
-bounding_box = c("left" = min(points_that_overlap$lon) + netagive_margin, 
-                 "bottom" = min(points_that_overlap$lat) + netagive_margin, 
+bounding_box = c("left" = min(points_that_overlap$lon) + negative_margin, 
+                 "bottom" = min(points_that_overlap$lat) + negative_margin, 
                  "right"=max(points_that_overlap$lon) + positive_margin, 
                  "top" = max(points_that_overlap$lat) + positive_margin
   )
@@ -173,7 +185,13 @@ m = get_stamenmap(bbox = bounding_box, zoom = 7, maptype = "toner-lite", source 
 write_tsv(points_that_overlap, RECORDS_WITHIN_BOUNDS_OUTPUT)
 ```
 
-```{r, draw_plots, message=FALSE, echo=FALSE, warning=FALSE}
+```{r, rename_unit_code, echo=FALSE, message=FALSE,warning=FALSE}
+# rename column here to make more sense in our graphs
+nps_shapes_that_intersect_df = nps_shapes_that_intersect_df %>% 
+  rename(park_code = UNIT_CODE)
+```
+
+```{r, draw_plots, cache=TRUE, message=FALSE, echo=FALSE, warning=FALSE}
 ########################################
 # map 1
 # a plot of all search result records with geopoints before doing the intersection search
@@ -183,11 +201,13 @@ write_tsv(points_that_overlap, RECORDS_WITHIN_BOUNDS_OUTPUT)
 
 map_1_subtitle = paste("Total records with geopoints:", api_results_clean %>% summarise(n = n()))
 
+
+
 ggmap(m,
       base_layer = ggplot(api_results_clean, aes(x = lon, y = lat)) + 
       ggtitle("All points from search results", subtitle = map_1_subtitle) 
       ) + 
-  geom_polygon(aes(x = long, y = lat, group = group, fill = UNIT_CODE), 
+  geom_polygon(aes(x = long, y = lat, group = group, fill = park_code), 
                data = nps_shapes_that_intersect_df, alpha = 0.5) + 
   geom_point(data = api_results_clean, aes(shape = kingdom, color = kingdom), alpha = 0.7)
 
@@ -205,20 +225,37 @@ ggmap(m,
       base_layer = ggplot(points_that_overlap, aes(x = lon, y = lat, alpha = 0.7))+ 
         ggtitle("Search results within park bounds", subtitle = map_2_subtitle)
 ) + 
-  geom_polygon(aes(x = long, y = lat, group = group, fill = UNIT_CODE), 
+  geom_polygon(aes(x = long, y = lat, group = group, fill = park_code), 
                data = nps_shapes_that_intersect_df, alpha = 0.5) + 
   geom_point(data = points_that_overlap, aes(shape = kingdom, color = kingdom), alpha = 0.7)
 
 ########################################
 # plot 1: counts by park
 
-ggplot(points_that_overlap, aes(overlap_code)) +
-  ggtitle("counts by park") + 
+plot_1_title = paste("counts by park", "( n =", points_that_overlap %>% summarize(n = n()), ")")
+
+ggplot(points_that_overlap, aes(park_code)) +
+  ggtitle(plot_1_title) + 
   geom_bar(aes(fill = kingdom))
+
+plot_2_title = paste("counts by institution code", "( n =", points_that_overlap %>% summarize(n = n()), ")")
+
 
 # plot 2: counts by institutioncode
 ggplot(points_that_overlap, aes(institutioncode)) +
-  ggtitle("counts by institutioncode") +
+  ggtitle(plot_2_title) +
+  geom_bar(aes(fill = kingdom)) +
+  coord_flip()
+
+
+```
+
+```{r, include=FALSE}
+plot_3_title = paste("counts by basis of record", "( n =", points_that_overlap %>% summarize(n = n()), ")")
+
+# plot 3: counts by basisofrecord
+ggplot(points_that_overlap, aes(basisofrecord)) +
+  ggtitle(plot_2_title) +
   geom_bar(aes(fill = kingdom)) +
   coord_flip()
 ```
