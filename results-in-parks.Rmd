@@ -18,6 +18,8 @@ library(rgdal)
 library(ridigbio)
 library(knitr)
 
+# Note: I tried to err on the side of something easy-to-follow, so please don't consider these best practices.  A script you plan on using (and hopeully re-using) for research will benefit from functionalizing code, unit tests, and so forth.
+
 IDIGBIO_API_RESULTS_FILE = "./data/idigbio_api_results.json"
 RECORDS_WITHIN_BOUNDS_OUTPUT = "./output/records_within_bounds.tsv"
 USE_RANDOM_SUBSET = TRUE
@@ -78,6 +80,9 @@ api_results_clean = idigbio_api_results %>%
   rownames_to_column(var = "id")
 ```  
 
+National Parks Service boundary datasets
+https://catalog.data.gov/dataset/national-parks
+
 ```{r, get_shape_data, include=FALSE, message=FALSE, echo=FALSE, warning=FALSE}
 ########################################
 # Step: Read in the shape data
@@ -89,7 +94,7 @@ nps_shapes = readOGR(dsn="nps_boundary/Current_Shapes/Data_Store/06-06-12_Postin
 # roughly half of the entire national list doesn't have a state value specified, which makes it
 # difficult to restrict based on that field.
 # We'll shortcut this for now with finding the codes manually.
-# Other options include perhaps seeing if the NPS API (free bu requires signup) allows us to do so
+# Other options include perhaps seeing if the NPS API (free but requires signup) allows us to do so
 # 
 # Another option would be to do the opposite lookup and restrict the parks to only parks that have 
 # point matches inside of them.
@@ -255,7 +260,7 @@ plot_3_title = paste("counts by basis of record", "( n =", points_that_overlap %
 
 # plot 3: counts by basisofrecord
 ggplot(points_that_overlap, aes(basisofrecord)) +
-  ggtitle(plot_2_title) +
+  ggtitle(plot_3_title) +
   geom_bar(aes(fill = kingdom)) +
   coord_flip()
 ```
